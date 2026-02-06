@@ -1,0 +1,99 @@
+import streamlit as st
+import pandas as pd
+from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+import os
+
+# --- 設定 ---
+CSV_FILE = 'attendance_data.csv'
+ADULT_PRICE = 5000  # 大人の単価（必要に応じて変更してください）
+CHILD_PRICE = 2500  # 子供の単価（必要に応じて変更してください）
+
+st.set_page_config(page_title="二次会幹事くん", layout="wide")
+st.title("二次会 出欠・集金管理システム")
+
+# --- データ読み込み・初期化 ---
+if os.path.exists(CSV_FILE):
+    df = pd.read_csv(CSV_FILE)
+else:
+    # 初期データ（画像に基づいたサンプル）
+    data = {
+        '名前': ['森本', '廣川', '山崎', '宮田', '田島', '高橋'],
+        '大人': [1, 2, 2, 2, 0, 2],
+        '子供': [1, 2, 1, 2, 0, 2],
+        '集金済': [False, False, False, False, False, False],
+        '備考': ['', '', '', '', '', '']
+    }
+    df = pd.DataFrame(data)
+
+# --- 入力フォーム（新規追加） ---
+with st.expander("➕ 新規ゲスト追加"):
+    with st.form("add_form"):
+        col1, col2, col3 = st.columns(3)
+        new_name = col1.text_input("名前")
+        new_adult = col2.number_input("大人", min_value=0, value=1)
+        new_child = col3.number_input("子供", min_value=0, value=0)
+        new_note = st.text_input("備考")
+        submit = st.form_submit_button("追加")
+        
+        if submit and new_name:
+            new_row = pd.DataFrame([[new_name, new_adult, new_child, False, new_note]], 
+                                   columns=df.columns)
+            df = pd.concat([df, new_row], ignore_index=True)
+            df.to_csv(CSV_FILE, index=False)
+            st.rerun()
+
+# --- メイン一覧表（編集可能） ---
+st.subheader("参加者リスト")
+edited_df = st.data_editor(
+    df,
+    column_config={
+        "集金済": st.column_config.CheckboxColumn("集金済", default=False),
+        "大人": st.column_config.NumberColumn(min_value=0),
+        "子供": st.column_config.NumberColumn(min_value=0),
+    },
+    num_rows="dynamic",
+    use_container_width=True
+)
+
+# 保存ボタン
+if st.button("データを保存する"):
+    edited_df.to_csv(CSV_FILE, index=False)
+    st.success("保存完了しました！")
+    st.rerun()
+
+# --- 集計セクション ---
+st.divider()
+total_adults = edited_df['大人'].sum()
+total_children = edited_df['子供'].sum()
+total_money = (total_adults * ADULT_PRICE) + (total_children * CHILD_PRICE)
+collected_money = ((edited_df[edited_df['集金済'] == True]['大人'].sum() * ADULT_PRICE) + 
+                   (edited_df[edited_df['集金済'] == True]['子供'].sum() * CHILD_PRICE))
+
+c1, c2, c3 = st.columns(3)
+c1.metric("合計人数", f"{total_adults + total_children} 名", f"大人{total_adults}/子{total_children}")
+c2.metric("総売上予定", f"{total_money:,} 円")
+c3.metric("現在集金額", f"{collected_money:,} 円", f"不足: {total_money - collected_money:,} 円")
+
+# --- PDF出力機能 ---
+def generate_pdf(data_frame):
+    pdf_file = "attendance_report.pdf"
+    c = canvas.Canvas(pdf_file)
+    # 日本語フォントの設定（環境に合わせてパスを指定してください）
+    # ※Streamlit Cloudで動かす場合はフォントファイルを同梱する必要があります
+    c.setFont("Helvetica", 12) 
+    c.drawString(100, 800, "Attendance Report")
+    
+    y = 750
+    for index, row in data_frame.iterrows():
+        line = f"{row['名前']} - 大人:{row['大人']} 子:{row['子供']} - {'OK' if row['集金済'] else '未'}"
+        c.drawString(100, y, line)
+        y -= 20
+    c.save()
+    return pdf_file
+
+if st.button("PDFレポートを作成"):
+    pdf_path = generate_pdf(edited_df)
+    with open(pdf_path, "rb") as f:
+        st.download_button("PDFをダウンロード", f, file_name="attendance.pdf")
