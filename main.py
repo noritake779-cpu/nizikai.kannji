@@ -74,7 +74,7 @@ edited_df = st.data_editor(
     },
     num_rows="dynamic",
     use_container_width=True,
-    key="editor_v11_final" # キーを更新して内部キャッシュを強制リセット
+    key="editor_v12_final" # キーを更新して内部キャッシュを強制リセット
 )
 
 # 保存処理
