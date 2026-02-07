@@ -105,3 +105,7 @@ if st.checkbox("印刷用プレビューを表示（PDF化はこちら）"):
 # 予備のCSV
 csv = display_df.to_csv(index=False).encode('utf_8_sig')
 st.download_button("Excel用CSVをダウンロード", csv, "attendance_list.csv", "text/csv")
+# 予備のCSV
+csv = display_df.to_csv(index=False).encode('utf_8_sig')
+st.download_button("Excel用CSVをダウンロード", csv, "attendance_list.csv", "text/csv")
+
