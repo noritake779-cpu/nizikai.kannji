@@ -9,58 +9,47 @@ PRICE_CHILD = 1500
 
 st.set_page_config(page_title="二次会幹事くん", layout="wide")
 
-# --- 【最強のデータクレンジング】 ---
-def load_fixed_data():
+# --- 【強制クレンジング】読み込み時に余計な列を捨てる ---
+def load_and_fix_data():
     target_cols = ['名前', '大人', '子供', '集金済', '備考']
     
-    # ファイルが存在するか確認
     if os.path.exists(CSV_FILE):
         try:
-            # CSVを読み込む
-            raw_df = pd.read_csv(CSV_FILE)
+            df = pd.read_csv(CSV_FILE)
+            # CSVに余計な列（家庭合計など）があれば強制削除し、必要な5列のみ抽出
+            df = df[[c for c in target_cols if c in df.columns]]
             
-            # 【外科手術】設定外の列（家庭合計など）を強制的に切り捨て、必要な列だけ抽出
-            # これで CSV に余計な列があってもエラーを回避できます
-            filtered_df = raw_df[[c for c in target_cols if c in raw_df.columns]].copy()
+            # 足りない列があれば補完
+            for c in target_cols:
+                if c not in df.columns:
+                    df[c] = False if c == '集金済' else (0 if c in ['大人', '子供'] else "")
             
-            # 足りない列があれば追加
-            for col in target_cols:
-                if col not in filtered_df.columns:
-                    if col == '集金済': filtered_df[col] = False
-                    elif col in ['大人', '子供']: filtered_df[col] = 0
-                    else: filtered_df[col] = ""
+            # 型を無理やり合わせる
+            df['大人'] = pd.to_numeric(df['大人'], errors='coerce').fillna(0).astype(int)
+            df['子供'] = pd.to_numeric(df['子供'], errors='coerce').fillna(0).astype(int)
+            df['集金済'] = df['集金済'].astype(bool)
             
-            # データの型を強制的に固定（data_editorが止まる最大の原因を排除）
-            filtered_df['大人'] = pd.to_numeric(filtered_df['大人'], errors='coerce').fillna(0).astype(int)
-            filtered_df['子供'] = pd.to_numeric(filtered_df['子供'], errors='coerce').fillna(0).astype(int)
-            filtered_df['集金済'] = filtered_df['集金済'].astype(bool)
-            
-            return filtered_df[target_cols] # 列順を固定
+            return df[target_cols] # 列順を固定
         except:
-            pass # 読み込み失敗時は初期値へ
+            pass
 
-    # 初期データ
     return pd.DataFrame({
         '名前': ['森本', '廣川', '山崎', '宮田', '田島', '高橋'],
-        '大人': [1, 2, 2, 2, 0, 2],
-        '子供': [1, 2, 1, 2, 0, 2],
-        '集金済': [False] * 6,
-        '備考': [""] * 6
+        '大人': [1, 2, 2, 2, 0, 2], '子供': [1, 2, 1, 2, 0, 2],
+        '集金済': [False]*6, '備考': [""]*6
     })
 
-# データのロード（セッション管理）
-if 'current_df' not in st.session_state:
-    st.session_state.current_df = load_fixed_data()
+# データロード
+if 'df' not in st.session_state:
+    st.session_state.df = load_and_fix_data()
 
 st.title("二次会 出欠・集金管理")
 
-# --- 1. リスト編集・チェック ---
+# --- リスト編集 ---
 st.subheader("📝 名簿編集・集金チェック")
 
-# 編集用：絶対に「家庭合計」を含めないクリーンな状態
-# keyを以前のものと全く違うものに変更してキャッシュをリセット
 edited_df = st.data_editor(
-    st.session_state.current_df,
+    st.session_state.df,
     column_config={
         "名前": st.column_config.TextColumn("名前"),
         "大人": st.column_config.NumberColumn("大人", min_value=0),
@@ -70,44 +59,32 @@ edited_df = st.data_editor(
     },
     num_rows="dynamic",
     use_container_width=True,
-    key="editor_FINAL_VERSION_1" 
+    key="fixed_editor_V100" # キーを大幅に変えてキャッシュを無視
 )
 
-# 保存ボタン
 if st.button("💾 データを保存する"):
-    st.session_state.current_df = edited_df
-    # CSVには純粋な5列のみを保存
+    st.session_state.df = edited_df
+    # CSVには計算列を含めず保存
     edited_df.to_csv(CSV_FILE, index=False)
-    st.success("保存完了しました！")
+    st.success("保存完了！")
     st.rerun()
 
-# --- 2. 計算・集計 ---
-# 表示用にコピーして「家庭合計」を計算
+# --- 計算表示（編集後のデータに基づいて表示のみ行う） ---
 calc_df = edited_df.copy()
-calc_df['家庭合計'] = (calc_df['大人'] * PRICE_ADULT) + (calc_df['子供'] * PRICE_CHILD)
+calc_df['合計'] = (calc_df['大人'] * PRICE_ADULT) + (calc_df['子供'] * PRICE_CHILD)
 
 st.divider()
-st.subheader("📊 会計状況")
-
-total_exp = calc_df['家庭合計'].sum()
-total_coll = calc_df[calc_df['集金済'] == True]['家庭合計'].sum()
-
+st.subheader("📊 集計状況")
 m1, m2, m3 = st.columns(3)
-m1.metric("総人数", f"{calc_df['大人'].sum() + calc_df['子供'].sum()} 名")
-m2.metric("総売上予定", f"¥{total_exp:,}")
-m3.metric("回収済金額", f"¥{total_coll:,}", f"不足 ¥{total_exp - total_coll:,}", delta_color="inverse")
+total = calc_df['合計'].sum()
+paid = calc_df[calc_df['集金済'] == True]['合計'].sum()
+m1.metric("総人数", f"{calc_df['大人'].sum() + calc_df['子供'].sum()}名")
+m2.metric("売上予定", f"¥{total:,}")
+m3.metric("回収済", f"¥{paid:,}", f"未回収 ¥{total - paid:,}", delta_color="inverse")
 
-# 金額入り確認表
-st.dataframe(
-    calc_df[['名前', '大人', '子供', '家庭合計', '集金済', '備考']],
-    column_config={"家庭合計": st.column_config.NumberColumn(format="¥%d")},
-    use_container_width=True
-)
+# 閲覧用テーブル
+st.dataframe(calc_df, use_container_width=True)
 
-# --- 3. 印刷・PDF対策 ---
-st.divider()
+# 印刷
 if st.checkbox("🖨️ PDF・印刷用表示"):
-    st.info("ブラウザの「印刷」機能からPDF保存してください。")
-    print_df = calc_df[['名前', '大人', '子供', '家庭合計', '集金済', '備考']].copy()
-    print_df['集金済'] = print_df['集金済'].apply(lambda x: "済" if x else " ")
-    st.table(print_df.style.format({"家庭合計": "¥{:,.0f}"}))
+    st.table(calc_df)
