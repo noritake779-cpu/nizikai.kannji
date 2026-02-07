@@ -8,80 +8,87 @@ PRICE_ADULT = 5000
 PRICE_CHILD = 1500
 
 st.set_page_config(page_title="二次会幹事くん", layout="wide")
-st.title("二次会 出欠・集金管理")
 
 # --- データ読み込み ---
 if os.path.exists(CSV_FILE):
-    df = pd.read_csv(CSV_FILE)
+    # 保存されたCSVから読み込む（計算列は含めない状態で読み込む）
+    df_base = pd.read_csv(CSV_FILE)
+    # 必須列があるか確認（エラー対策）
+    for col in ['名前', '大人', '子供', '集金済', '備考']:
+        if col not in df_base.columns:
+            df_base[col] = 0 if col in ['大人', '子供'] else ""
 else:
-    # 初期データ（画像に基づいたサンプル）
-    data = {
+    # 初期データ
+    df_base = pd.DataFrame({
         '名前': ['森本', '廣川', '山崎', '宮田', '田島', '高橋'],
         '大人': [1, 2, 2, 2, 0, 2],
         '子供': [1, 2, 1, 2, 0, 2],
         '集金済': [False, False, False, False, False, False],
         '備考': ['', '', '', '', '', '']
-    }
-    df = pd.DataFrame(data)
+    })
 
-# --- 金額計算ロジック ---
-# 各行（家庭）ごとの合計を計算する列を追加
-df['家庭合計'] = (df['大人'] * PRICE_ADULT) + (df['子供'] * PRICE_CHILD)
+st.title("二次会 出欠・集金管理")
 
-# --- 1. 入力・編集セクション ---
-st.subheader("参加者リスト編集")
-st.caption("※表を編集した後は必ず下の『保存する』ボタンを押してください。")
+# --- 1. 入力セクション ---
+st.subheader("📝 ゲストリスト編集")
+st.info("大人・子供の人数を入力して「保存」を押すと、金額が自動計算されます。")
 
+# 編集用エディタ（計算列を含まないベースのデータのみ渡す）
 edited_df = st.data_editor(
-    df,
+    df_base,
     column_config={
-        "名前": st.column_config.TextColumn("名前", width="medium"),
-        "大人": st.column_config.NumberColumn("大人", min_value=0),
-        "子供": st.column_config.NumberColumn("子供", min_value=0),
-        "家庭合計": st.column_config.NumberColumn("家庭合計(円)", disabled=True, format="%d"),
+        "名前": st.column_config.TextColumn("名前"),
+        "大人": st.column_config.NumberColumn("大人", min_value=0, step=1),
+        "子供": st.column_config.NumberColumn("子供", min_value=0, step=1),
         "集金済": st.column_config.CheckboxColumn("集金済"),
-        "備考": st.column_config.TextColumn("備考", width="large"),
+        "備考": st.column_config.TextColumn("備考"),
     },
     num_rows="dynamic",
     use_container_width=True,
-    key="data_editor"
+    key="guest_editor"
 )
 
-# 保存処理
-if st.button("💾 変更を保存する"):
-    # 家庭合計は計算列なので、保存時は除外するか、そのまま保存
+# 保存ボタン
+if st.button("💾 変更を確定して保存する"):
     edited_df.to_csv(CSV_FILE, index=False)
     st.success("データを保存しました！")
     st.rerun()
 
-# --- 2. 全体集計セクション ---
+# --- 2. 計算・集計セクション ---
+# 編集後のデータに計算列を追加して表示用DFを作成
+display_df = edited_df.copy()
+display_df['家庭合計'] = (display_df['大人'] * PRICE_ADULT) + (display_df['子供'] * PRICE_CHILD)
+
 st.divider()
-st.subheader("📊 全体集計")
+st.subheader("💰 お会計・集計状況")
 
-total_adults = edited_df['大人'].sum()
-total_children = edited_df['子供'].sum()
-total_expected = edited_df['家庭合計'].sum()
-# 集金済みの人だけの合計
-total_collected = edited_df[edited_df['集金済'] == True]['家庭合計'].sum()
+# メトリクス表示
+total_expected = display_df['家庭合計'].sum()
+total_collected = display_df[display_df['集金済'] == True]['家庭合計'].sum()
 
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("総人数", f"{total_adults + total_children}名", f"大人{total_adults}/子{total_children}")
-col2.metric("総売上予定", f"¥{total_expected:,}")
-col3.metric("回収済み", f"¥{total_collected:,}")
-col4.metric("未回収(不足)", f"¥{total_expected - total_collected:,}", delta_color="inverse")
+c1, c2, c3 = st.columns(3)
+c1.metric("総人数", f"{display_df['大人'].sum() + display_df['子供'].sum()}名")
+c2.metric("売上予定", f"¥{total_expected:,}")
+c3.metric("回収済み", f"¥{total_collected:,}", f"不足 ¥{total_expected - total_collected:,}", delta_color="inverse")
 
-# --- 3. 出力セクション ---
-st.divider()
-st.subheader("🖨️ リスト出力")
-
-# PDF出力の代わりに、最も確実な「CSVダウンロード」ボタンを設置
-# これならスマホでExcelやNumbersで開いてそのまま印刷できます
-csv = edited_df.to_csv(index=False).encode('utf_8_sig') # utf_8_sigにすることでExcelでも文字化けしません
-st.download_button(
-    label="CSV形式でダウンロード（Excel/印刷用）",
-    data=csv,
-    file_name='attendance_list.csv',
-    mime='text/csv',
+# 計算後の表を表示
+st.dataframe(
+    display_df[['名前', '大人', '子供', '家庭合計', '集金済', '備考']],
+    use_container_width=True,
+    column_config={"家庭合計": st.column_config.NumberColumn(format="¥%d")}
 )
 
-st.info("💡 ヒント: PDFが必要な場合は、ブラウザのメニューから『印刷』を選択し、『PDFとして保存』を実行してください。この画面がそのまま綺麗に保存されます。")
+# --- 3. 出力・印刷セクション ---
+st.divider()
+st.subheader("🖨️ 印刷・PDF出力")
+
+if st.button("印刷用ページを表示"):
+    # シンプルなHTMLテーブルを作成して表示
+    html_table = display_df.to_html(classes='table table-striped', index=False)
+    st.markdown(f"### 印刷用プレビュー")
+    st.write("この表が表示されたら、ブラウザの『共有/メニュー』から『印刷』を選んでPDF保存してください。")
+    st.markdown(html_table, unsafe_allow_html=True)
+
+# CSVダウンロードも念のため残す
+csv = display_df.to_csv(index=False).encode('utf_8_sig')
+st.download_button("Excel用CSVをダウンロード", csv, "attendance.csv", "text/csv")
