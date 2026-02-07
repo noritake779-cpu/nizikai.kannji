@@ -8,27 +8,32 @@ PRICE_ADULT = 5000
 PRICE_CHILD = 1500
 
 st.set_page_config(page_title="二次会幹事くん", layout="wide")
-st.title("二次会 出欠・集金管理")
 
-# --- データ浄化・読み込み関数 ---
-def load_clean_data():
-    # アプリが扱うべき正式な列名
+# --- 【重要】データ修復・読み込みロジック ---
+def get_safe_data():
     valid_cols = ['名前', '大人', '子供', '集金済', '備考']
     
     if os.path.exists(CSV_FILE):
         try:
-            df = pd.read_csv(CSV_FILE)
-            # エラーの原因となる「家庭合計」などの余計な列を強制削除
-            df = df[[c for c in valid_cols if c in df.columns]]
-            # 必要な列が足りない場合の補完
-            for c in valid_cols:
-                if c not in df.columns:
-                    df[c] = False if c == '集金済' else (0 if c in ['大人', '子供'] else "")
-            return df
-        except:
-            pass # 読み込みエラー時は初期値へ
+            raw_df = pd.read_csv(CSV_FILE)
+            # エラーの原因となる「家庭合計」列が混じっていたら強制削除
+            safe_df = raw_df[[c for c in valid_cols if c in raw_df.columns]].copy()
             
-    # 初期データ
+            # 足りない列があれば補完
+            for c in valid_cols:
+                if c not in safe_df.columns:
+                    safe_df[c] = False if c == '集金済' else (0 if c in ['大人', '子供'] else "")
+            
+            # もしこの時点で空っぽ（列が一つもない）なら初期データを返す
+            if safe_df.empty or len(safe_df.columns) < 2:
+                raise ValueError("Data is corrupted")
+                
+            return safe_df
+        except:
+            # CSVが壊れている、または古い形式の場合は初期データを生成
+            pass
+
+    # 初期データ（画像に基づいたサンプル）
     return pd.DataFrame({
         '名前': ['森本', '廣川', '山崎', '宮田', '田島', '高橋'],
         '大人': [1, 2, 2, 2, 0, 2],
@@ -38,16 +43,18 @@ def load_clean_data():
     })
 
 # データのロード
-if 'df' not in st.session_state:
-    st.session_state.df = load_clean_data()
+# 起動時に一度だけ安全なデータをセッションに格納
+if 'df_main' not in st.session_state:
+    st.session_state.df_main = get_safe_data()
+
+st.title("二次会 出欠・集金管理")
 
 # --- 1. 編集セクション ---
 st.subheader("📝 ゲストリスト編集・集金チェック")
-st.info("人数やチェックを変更したら、必ず下の「保存ボタン」を押してください。")
 
-# 計算列を含まない「生データ」のみを編集
+# 計算列を絶対に含ませないようにエディタを表示
 edited_df = st.data_editor(
-    st.session_state.df,
+    st.session_state.df_main,
     column_config={
         "名前": st.column_config.TextColumn("名前"),
         "大人": st.column_config.NumberColumn("大人", min_value=0),
@@ -57,55 +64,41 @@ edited_df = st.data_editor(
     },
     num_rows="dynamic",
     use_container_width=True,
-    key="v4_editor"
+    key="editor_final" # キーを変更して内部キャッシュをクリア
 )
 
 # 保存処理
-if st.button("💾 変更を保存して反映"):
-    st.session_state.df = edited_df
+if st.button("💾 変更を保存する"):
+    st.session_state.df_main = edited_df
+    # CSVには計算用の「家庭合計」を含めず、純粋な5列のみ保存
     edited_df.to_csv(CSV_FILE, index=False)
-    st.success("データを保存しました。")
+    st.success("保存完了！")
     st.rerun()
 
-# --- 2. 計算と集計表示 ---
-# 表示用データ作成（ここで初めて計算列を追加）
+# --- 2. 表示・集計セクション ---
+# ここで初めて「表示用」として計算を行う
 display_df = edited_df.copy()
 display_df['家庭合計'] = (display_df['大人'] * PRICE_ADULT) + (display_df['子供'] * PRICE_CHILD)
 
 st.divider()
-st.subheader("📊 会計・集計状況")
+st.subheader("💰 会計状況")
 
-total_m = display_df['家庭合計'].sum()
-coll_m = display_df[display_df['集金済'] == True]['家庭合計'].sum()
+t_money = display_df['家庭合計'].sum()
+c_money = display_df[display_df['集金済'] == True]['家庭合計'].sum()
 
 m1, m2, m3 = st.columns(3)
 m1.metric("総人数", f"{display_df['大人'].sum() + display_df['子供'].sum()}名")
-m2.metric("総売上予定", f"¥{total_m:,}")
-m3.metric("回収済（現在）", f"¥{coll_m:,}", f"不足 ¥{total_m - coll_m:,}", delta_color="inverse")
+m2.metric("総売上予定", f"¥{t_money:,}")
+m3.metric("回収済", f"¥{c_money:,}", f"不足 ¥{t_money - c_money:,}", delta_color="inverse")
 
-# 金額が見える一覧表（閲覧専用）
-st.dataframe(
-    display_df[['名前', '大人', '子供', '家庭合計', '集金済', '備考']],
-    column_config={"家庭合計": st.column_config.NumberColumn(format="¥%d")},
-    use_container_width=True
-)
+# 金額入りの確認用テーブル
+st.dataframe(display_df, use_container_width=True)
 
-# --- 3. PDF・印刷対策 ---
+# --- 3. 印刷用プレビュー ---
 st.divider()
-st.subheader("🖨️ PDF・リスト印刷")
-
-# 印刷用のHTML表示
-if st.checkbox("印刷用プレビューを表示（PDF化はこちら）"):
-    st.warning("【PDF作成方法】: 下の表が出たら、スマホの共有ボタン→『印刷』を選択し、プレビューをピンチアウトするか『PDFとして保存』を選んでください。")
-    # 印刷用に整形
-    print_table = display_df[['名前', '大人', '子供', '家庭合計', '集金済', '備考']].copy()
-    print_table['集金済'] = print_table['集金済'].apply(lambda x: "OK" if x else " ")
-    st.table(print_table)
-
-# 予備のCSV
-csv = display_df.to_csv(index=False).encode('utf_8_sig')
-st.download_button("Excel用CSVをダウンロード", csv, "attendance_list.csv", "text/csv")
-# 予備のCSV
-csv = display_df.to_csv(index=False).encode('utf_8_sig')
-st.download_button("Excel用CSVをダウンロード", csv, "attendance_list.csv", "text/csv")
-
+if st.checkbox("🖨️ 印刷・PDF用プレビューを表示"):
+    st.info("ブラウザの「印刷」メニューからPDF保存してください。")
+    # 印刷用に「集金済」を文字に変える
+    print_df = display_df[['名前', '大人', '子供', '家庭合計', '集金済', '備考']].copy()
+    print_df['集金済'] = print_df['集金済'].apply(lambda x: "済" if x else " ")
+    st.table(print_df)
