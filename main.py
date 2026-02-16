@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import os
 
-# --- 設定 ---
+# --- 1. 基本設定 ---
 CSV_FILE = 'attendance_data.csv'
 PRICE_ADULT = 5000
 PRICE_CHILD = 1500
@@ -10,53 +10,41 @@ PRICE_TEACHER = 2000
 
 st.set_page_config(page_title="二次会幹事くん", layout="wide")
 
-# --- データの読み込みと列の強制整形 ---
+# --- 2. データの強制初期化・読み込み ---
 def load_data():
-    target_cols = ['名前', '大人', '子供', '先生', '集金済', '備考']
+    # 必要な列を定義
+    cols = ['名前', '大人', '子供', '先生', '集金済', '備考']
     
     if os.path.exists(CSV_FILE):
         try:
             df = pd.read_csv(CSV_FILE)
-            # 現在のプログラムに必要な5列（+備考）だけを抜き出し、余計な列は無視する
-            valid_df = df[[c for c in target_cols if c in df.columns]].copy()
-            
-            # 足りない列（先生など）を強制的に追加
-            for col in target_cols:
-                if col not in valid_df.columns:
-                    if col == '集金済': valid_df[col] = False
-                    elif col in ['大人', '子供', '先生']: valid_df[col] = 0
-                    else: valid_df[col] = ""
-            
-            # データ型を固定
-            valid_df['大人'] = pd.to_numeric(valid_df['大人'], errors='coerce').fillna(0).astype(int)
-            valid_df['子供'] = pd.to_numeric(valid_df['子供'], errors='coerce').fillna(0).astype(int)
-            valid_df['先生'] = pd.to_numeric(valid_df['先生'], errors='coerce').fillna(0).astype(int)
-            valid_df['集金済'] = valid_df['集金済'].astype(bool)
-            
-            return valid_df[target_cols]
+            # 必要な列だけを残す（エラー対策の外科手術）
+            df = df[[c for c in cols if c in df.columns]].copy()
+            # 足りない列を補う
+            for c in cols:
+                if c not in df.columns:
+                    df[c] = False if c == '集金済' else 0 if c in ['大人', '子供', '先生'] else ""
+            return df[cols]
         except:
             pass
 
-    # 初期データ
-    return pd.DataFrame({
-        '名前': ['森本', '廣川', '山崎', '宮田', '田島', '高橋'],
-        '大人': [1, 2, 2, 2, 0, 2],
-        '子供': [1, 2, 1, 2, 0, 2],
-        '先生': [0, 0, 0, 0, 0, 0],
-        '集金済': [False] * 6,
-        '備考': [""] * 6
-    })
+    # 初期サンプルデータ
+    return pd.DataFrame([
+        {'名前': '森本', '大人': 1, '子供': 1, '先生': 0, '集金済': False, '備考': ''},
+        {'名前': '廣川', '大人': 2, '子供': 2, '先生': 0, '集金済': False, '備考': ''},
+    ])
 
-# 初回ロード
+# セッション状態にデータを保持
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
 
 st.title("二次会 出欠・集金管理")
 
-# --- 1. 名簿編集セクション ---
-st.subheader("📝 名簿編集")
+# --- 3. メイン編集エリア ---
+st.subheader("📝 ゲストリスト編集")
+st.info("一番下の空行に名前を入力すると、自動でチェックボックスや0が追加されます。")
 
-# エディタの表示（キャッシュキーを更新: editor_v_teacher）
+# エディタ（最もエラーが起きにくいシンプルな設定）
 edited_df = st.data_editor(
     st.session_state.df,
     column_config={
@@ -69,45 +57,41 @@ edited_df = st.data_editor(
     },
     num_rows="dynamic",
     use_container_width=True,
-    key="editor_v_teacher"  # ここを以前と変えることでエラーを回避！
+    key="editor_final_ver" # 以前とキーを変えてキャッシュをリセット
 )
 
-if st.button("💾 データを保存する"):
-    # 1. 状態を更新
+# 保存ボタン
+if st.button("💾 変更を保存する"):
     st.session_state.df = edited_df
-    # 2. ファイルに保存
     edited_df.to_csv(CSV_FILE, index=False)
-    st.success("保存に成功しました！最新の集計を表示します。")
-    # 3. 強制リロードして不整合を解消
+    st.success("保存に成功しました！")
     st.rerun()
 
-# --- 2. 計算と集計 ---
-# 新しく追加された行も即座に反映
+# --- 4. 集計表示 ---
 calc_df = edited_df.copy()
-calc_df['合計額'] = (calc_df['大人'].astype(int) * PRICE_ADULT) + \
-                    (calc_df['子供'].astype(int) * PRICE_CHILD) + \
-                    (calc_df['先生'].astype(int) * PRICE_TEACHER)
+# 計算（新規行も即反映）
+calc_df['合計金額'] = (calc_df['大人'] * PRICE_ADULT) + \
+                      (calc_df['子供'] * PRICE_CHILD) + \
+                      (calc_df['先生'] * PRICE_TEACHER)
 
 st.divider()
-st.subheader("📊 会計状況")
+st.subheader("📊 会計・集計")
 
-total_m = calc_df['合計額'].sum()
-paid_m = calc_df[calc_df['集金済'] == True]['合計額'].sum()
+total_money = calc_df['合計金額'].sum()
+paid_money = calc_df[calc_df['集金済'] == True]['合計金額'].sum()
 
 m1, m2, m3 = st.columns(3)
 m1.metric("総人数", f"{int(calc_df[['大人', '子供', '先生']].sum().sum())}名")
-m2.metric("売上予定", f"¥{int(total_m):,}")
-m3.metric("回収済", f"¥{int(paid_m):,}", f"不足 ¥{int(total_m - paid_m):,}", delta_color="inverse")
+m2.metric("売上予定", f"¥{int(total_money):,}")
+m3.metric("回収済", f"¥{int(paid_money):,}", f"不足 ¥{int(total_money - paid_money):,}", delta_color="inverse")
 
-# 金額入りデータフレームの表示
-st.dataframe(
-    calc_df,
-    column_config={"合計額": st.column_config.NumberColumn(format="¥%d")},
-    use_container_width=True
-)
+# 金額入り確認表
+st.dataframe(calc_df, use_container_width=True)
 
-# --- 3. 印刷用 ---
-if st.checkbox("🖨️ PDF・印刷用リストを表示"):
-    print_df = calc_df.copy()
-    print_df['集金済'] = print_df['集金済'].apply(lambda x: "済" if x else " ")
-    st.table(print_df.style.format({"合計額": "¥{:,.0f}"}))
+# --- 5. 印刷用（PDFの代わり） ---
+st.divider()
+if st.checkbox("🖨️ 印刷用リストを表示"):
+    st.write("この表が表示されたら、スマホやPCのブラウザメニューから『印刷』を選び、PDFとして保存してください。")
+    print_tab = calc_df.copy()
+    print_tab['集金済'] = print_tab['集金済'].apply(lambda x: "済" if x else " ")
+    st.table(print_tab)
