@@ -12,26 +12,28 @@ st.set_page_config(page_title="二次会幹事くん", layout="wide")
 
 # --- データの読み込みと列の強制整形 ---
 def load_data():
-    # 必要な6列を定義
     target_cols = ['名前', '大人', '子供', '先生', '集金済', '備考']
     
     if os.path.exists(CSV_FILE):
         try:
             df = pd.read_csv(CSV_FILE)
-            # 1. 余計な列を削除
-            df = df[[c for c in target_cols if c in df.columns]].copy()
-            # 2. 足りない列を補完
+            # 現在のプログラムに必要な5列（+備考）だけを抜き出し、余計な列は無視する
+            valid_df = df[[c for c in target_cols if c in df.columns]].copy()
+            
+            # 足りない列（先生など）を強制的に追加
             for col in target_cols:
-                if col not in df.columns:
-                    if col == '集金済': df[col] = False
-                    elif col in ['大人', '子供', '先生']: df[col] = 0
-                    else: df[col] = ""
-            # 3. 型を固定（ここがズレるとチェックボックスが出ません）
-            df['大人'] = pd.to_numeric(df['大人']).fillna(0).astype(int)
-            df['子供'] = pd.to_numeric(df['子供']).fillna(0).astype(int)
-            df['先生'] = pd.to_numeric(df['先生']).fillna(0).astype(int)
-            df['集金済'] = df['集金済'].astype(bool)
-            return df[target_cols]
+                if col not in valid_df.columns:
+                    if col == '集金済': valid_df[col] = False
+                    elif col in ['大人', '子供', '先生']: valid_df[col] = 0
+                    else: valid_df[col] = ""
+            
+            # データ型を固定
+            valid_df['大人'] = pd.to_numeric(valid_df['大人'], errors='coerce').fillna(0).astype(int)
+            valid_df['子供'] = pd.to_numeric(valid_df['子供'], errors='coerce').fillna(0).astype(int)
+            valid_df['先生'] = pd.to_numeric(valid_df['先生'], errors='coerce').fillna(0).astype(int)
+            valid_df['集金済'] = valid_df['集金済'].astype(bool)
+            
+            return valid_df[target_cols]
         except:
             pass
 
@@ -45,6 +47,7 @@ def load_data():
         '備考': [""] * 6
     })
 
+# 初回ロード
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
 
@@ -52,9 +55,8 @@ st.title("二次会 出欠・集金管理")
 
 # --- 1. 名簿編集セクション ---
 st.subheader("📝 名簿編集")
-st.info("一番下の空行に名前を入れると、新しい行が追加されます。")
 
-# エディタ設定（エラーの原因になる引数を削り、最も安定した形にしました）
+# エディタの表示（キャッシュキーを更新: editor_v_teacher）
 edited_df = st.data_editor(
     st.session_state.df,
     column_config={
@@ -67,18 +69,20 @@ edited_df = st.data_editor(
     },
     num_rows="dynamic",
     use_container_width=True,
-    key="editor_vfinal"
+    key="editor_v_teacher"  # ここを以前と変えることでエラーを回避！
 )
 
-if st.button("💾 変更を保存する"):
+if st.button("💾 データを保存する"):
+    # 1. 状態を更新
     st.session_state.df = edited_df
-    # CSV保存（計算列は含めない）
+    # 2. ファイルに保存
     edited_df.to_csv(CSV_FILE, index=False)
-    st.success("保存しました！")
+    st.success("保存に成功しました！最新の集計を表示します。")
+    # 3. 強制リロードして不整合を解消
     st.rerun()
 
 # --- 2. 計算と集計 ---
-# 新しく追加された行も含めて計算
+# 新しく追加された行も即座に反映
 calc_df = edited_df.copy()
 calc_df['合計額'] = (calc_df['大人'].astype(int) * PRICE_ADULT) + \
                     (calc_df['子供'].astype(int) * PRICE_CHILD) + \
@@ -95,7 +99,7 @@ m1.metric("総人数", f"{int(calc_df[['大人', '子供', '先生']].sum().sum(
 m2.metric("売上予定", f"¥{int(total_m):,}")
 m3.metric("回収済", f"¥{int(paid_m):,}", f"不足 ¥{int(total_m - paid_m):,}", delta_color="inverse")
 
-# 金額入りの表
+# 金額入りデータフレームの表示
 st.dataframe(
     calc_df,
     column_config={"合計額": st.column_config.NumberColumn(format="¥%d")},
