@@ -6,6 +6,8 @@ import pandas as pd
 PRICE_ADULT = 5000
 PRICE_CHILD = 1500
 PRICE_TEACHER = 2000
+# あなたのスプレッドシートURLをここにも貼っておきます
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1-ulN6CZCuiK9u0HWnaas1Y7X5QTv7j-xUFkJLsFCL28"
 
 st.set_page_config(page_title="二次会幹事くん Pro", layout="wide")
 
@@ -14,12 +16,16 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 # データの読み込み
 def load_data():
-    return conn.read(ttl=0) # ttl=0で常に最新を取得
+    # Secretsから読み込めない場合のためにURLを直接指定
+    return conn.read(spreadsheet=SHEET_URL, ttl=0)
 
-df = load_data()
+try:
+    df = load_data()
+except Exception as e:
+    st.error("スプレッドシートの読み込みに失敗しました。Secretsの設定またはURLを確認してください。")
+    st.stop()
 
-st.title("二次会 出欠・集金管理 (スプレッドシート連携版)")
-st.info("ここで編集して保存すると、Googleスプレッドシートに即座に反映されます。")
+st.title("二次会 出欠・集金管理")
 
 # 編集用エディタ
 edited_df = st.data_editor(
@@ -32,13 +38,13 @@ edited_df = st.data_editor(
     },
     num_rows="dynamic",
     use_container_width=True,
-    key="gsheet_editor"
+    key="gsheet_editor_v2"
 )
 
 # 保存ボタン
 if st.button("💾 スプレッドシートに保存"):
     try:
-        conn.update(data=edited_df)
+        conn.update(spreadsheet=SHEET_URL, data=edited_df)
         st.success("Googleスプレッドシートへの保存が完了しました！")
         st.balloons()
     except Exception as e:
@@ -46,7 +52,6 @@ if st.button("💾 スプレッドシートに保存"):
 
 # --- 集計表示 ---
 calc_df = edited_df.copy()
-# 数値変換と計算
 for col in ['大人', '子供', '先生']:
     calc_df[col] = pd.to_numeric(calc_df[col], errors='coerce').fillna(0)
 
